@@ -1,6 +1,6 @@
 import os, uuid, json, shutil
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
 import joblib
@@ -199,20 +199,29 @@ def me(user=Depends(current_user)):
 @app.get("/api/v1/dashboard/summary")
 def dashboard(user=Depends(current_user), db: Session = Depends(get_db)):
     org = user.organization_id
+    student_count = db.query(models.Student).filter_by(organization_id=org).count()
+    course_count = db.query(models.Course).filter_by(organization_id=org).count()
+    assessment_count = db.query(models.Assessment).filter_by(organization_id=org).count()
+    enrollment_count = db.query(models.Enrollment).filter_by(organization_id=org).count()
+    result_count = db.query(models.AssessmentResult).filter_by(organization_id=org).count()
+    students = {x.id: x.full_name for x in db.query(models.Student).filter_by(organization_id=org).all()}
+    recent = db.query(models.LearningEvent).filter_by(organization_id=org).order_by(models.LearningEvent.occurred_at.desc()).limit(8).all()
     return {
-        "students": db.query(models.Student).filter_by(organization_id=org).count(),
-        "courses": db.query(models.Course).filter_by(organization_id=org).count(),
-        "assessments": db.query(models.Assessment).filter_by(organization_id=org).count(),
+        "students": student_count,
+        "courses": course_count,
+        "assessments": assessment_count,
+        "enrollments": enrollment_count,
+        "graded_results": result_count,
         "learning_events": db.query(models.LearningEvent).filter_by(organization_id=org).count(),
-        "recommendations": db.query(models.Recommendation).filter_by(organization_id=org).count(),
-        "ai_status":"Sin modelo aprobado",
+        "recommendations_count": db.query(models.Recommendation).filter_by(organization_id=org).count(),
+        "ai_status": "Modelo experimental" if db.query(models.ModelVersion).filter_by(organization_id=org, approval_status="approved").count() == 0 else "Modelo aprobado",
         "active_students": db.query(models.Student).filter_by(organization_id=org, status="active").count(),
-        "recent_activity": [{"id": x.id, "event_type": x.event_type, "description": x.description, "occurred_at": x.occurred_at} for x in db.query(models.LearningEvent).filter_by(organization_id=org).order_by(models.LearningEvent.occurred_at.desc()).limit(8).all()]
+        "recent_activity": [{"id": x.id, "student_name": students.get(x.student_id, "Estudiante"), "event_type": x.event_type, "description": x.description, "occurred_at": x.occurred_at} for x in recent]
     }
 
 @app.get("/api/v1/dashboard/analytics")
 def dashboard_analytics(user=Depends(current_user), db: Session = Depends(get_db)):
-    """Indicadores calculados exclusivamente con matrículas, notas y ubicaciones registradas."""
+    """Indicadores calculados desde notas, matrículas, actividad y coordenadas persistidas."""
     org = user.organization_id
     results = db.query(models.AssessmentResult).filter_by(organization_id=org).all()
     assessments = {x.id: x for x in db.query(models.Assessment).filter_by(organization_id=org).all()}
@@ -221,7 +230,6 @@ def dashboard_analytics(user=Depends(current_user), db: Session = Depends(get_db
     enrollments = db.query(models.Enrollment).filter_by(organization_id=org).all()
     events = db.query(models.LearningEvent).filter_by(organization_id=org).all()
 
-    # Evolución mensual: promedio real de notas registradas por mes.
     monthly = {}
     for result in results:
         month = result.graded_at.strftime("%Y-%m")
@@ -231,7 +239,6 @@ def dashboard_analytics(user=Depends(current_user), db: Session = Depends(get_db
         for month, scores in sorted(monthly.items())[-12:]
     ]
 
-    # Desempeño agrupado por curso, sin presentarlo como dominio de habilidades.
     course_scores = {}
     for result in results:
         assessment = assessments.get(result.assessment_id)
@@ -243,36 +250,50 @@ def dashboard_analytics(user=Depends(current_user), db: Session = Depends(get_db
         for name, scores in sorted(course_scores.items())
     ]
 
-    geo_points = [
-        {"id": s.id, "name": s.full_name, "district": s.district,
-         "latitude": s.latitude, "longitude": s.longitude}
-        for s in students if s.latitude is not None and s.longitude is not None
+    # Dominio estimado: promedio del curso convertido a porcentaje de su puntaje máximo.
+    # Se etiqueta como estimación porque el esquema no almacena rúbricas independientes.
+    mastery_scores = {}
+    for result in results:
+        assessment = assessments.get(result.assessment_id)
+        course = courses.get(assessment.course_id) if assessment else None
+        if course:
+            max_score = float(assessment.max_score or 20) if assessment else 20.0
+            pct = max(0.0, min(100.0, (float(result.score) / max(max_score, 1.0)) * 100.0))
+            mastery_scores.setdefault(course.title, []).append(pct)
+    skill_mastery = [
+        {"name": name, "value": round(sum(values) / len(values), 1), "count": len(values), "source": "assessment_average_estimate"}
+        for name, values in sorted(mastery_scores.items())
     ]
 
+    geo_points = [
+        {"id": st.id, "name": st.full_name, "district": st.district,
+         "latitude": st.latitude, "longitude": st.longitude}
+        for st in students if st.latitude is not None and st.longitude is not None
+    ]
     recs = db.query(models.Recommendation).filter_by(organization_id=org).order_by(models.Recommendation.id.desc()).limit(8).all()
-    student_names = {s.id: s.full_name for s in students}
+    student_names = {st.id: st.full_name for st in students}
     recommendations = [
-        {"id": r.id, "title": r.title, "description": r.rationale,
-         "status": r.status, "student_name": student_names.get(r.student_id, "Estudiante")}
-        for r in recs
+        {"id": rec.id, "title": rec.title, "description": rec.rationale,
+         "status": rec.status, "student_name": student_names.get(rec.student_id, "Estudiante")}
+        for rec in recs
     ]
     return {
         "monthly_progress": monthly_progress,
         "course_performance": course_performance,
+        "skill_mastery": skill_mastery,
         "geo_points": geo_points,
         "students_with_location": len(geo_points),
         "students_without_location": max(0, len(students) - len(geo_points)),
         "enrollments": len(enrollments),
-        "completed_enrollments": sum(1 for x in enrollments if x.status == "completed"),
+        "completed_enrollments": sum(1 for item in enrollments if item.status == "completed"),
         "learning_events": len(events),
         "graded_results": len(results),
         "recommendations": recommendations,
-        "skill_mastery": [],
         "data_quality": {
             "has_grades": bool(results),
             "has_locations": bool(geo_points),
             "has_enrollments": bool(enrollments),
-            "note": "Los indicadores se calculan con datos académicos registrados. No se generan datos de ejemplo automáticamente."
+            "note": "Indicadores calculados con datos académicos guardados en la base institucional."
         }
     }
 
@@ -354,6 +375,143 @@ class GradeIn(BaseModel):
     score: float = Field(ge=0)
     feedback: str = ""
 
+
+@app.post("/api/v1/demo/seed")
+def seed_demo_academic_data(user=Depends(require_admin), db: Session = Depends(get_db)):
+    """Carga una muestra académica ficticia, identificada con prefijo DEMO y sin borrar datos existentes."""
+    org = user.organization_id
+    existing_students = db.query(models.Student).filter(
+        models.Student.organization_id == org,
+        models.Student.student_code.like("DEMO-%")
+    ).count()
+    existing_courses = db.query(models.Course).filter(
+        models.Course.organization_id == org,
+        models.Course.code.like("DEMO-%")
+    ).count()
+    if existing_students or existing_courses:
+        return {
+            "ok": True,
+            "already_loaded": True,
+            "message": "Los datos DEMO ya estaban cargados. No se duplicó ningún registro.",
+            "students": existing_students,
+            "courses": existing_courses
+        }
+
+    district_data = [
+        ("Los Olivos", -11.9700, -77.0700), ("Independencia", -11.9900, -77.0500),
+        ("San Martín de Porres", -12.0000, -77.0900), ("Comas", -11.9300, -77.0600),
+        ("San Miguel", -12.0800, -77.0900), ("Cercado de Lima", -12.0464, -77.0428),
+        ("Rímac", -12.0250, -77.0350), ("Callao", -12.0560, -77.1180),
+        ("Miraflores", -12.1210, -77.0300), ("Ate", -12.0260, -76.9200),
+        ("San Juan de Lurigancho", -11.9800, -76.9900), ("Pueblo Libre", -12.0760, -77.0620)
+    ]
+    demo_students = []
+    for i in range(36):
+        district, lat, lon = district_data[i % len(district_data)]
+        demo_students.append(models.Student(
+            organization_id=org,
+            student_code=f"DEMO-{org[:6].upper()}-2026-{i+1:03d}",
+            full_name=f"Estudiante DEMO {i+1:03d}",
+            email=f"estudiante.demo{i+1:03d}@example.test",
+            district=district,
+            latitude=lat + ((i % 3) - 1) * 0.0015,
+            longitude=lon + ((i % 4) - 1.5) * 0.0015,
+            status="active" if i % 7 else "inactive"
+        ))
+    db.add_all(demo_students)
+
+    course_specs = [
+        ("Fundamentos de programación", "Lógica, algoritmos, variables y estructuras de control.", "Básico"),
+        ("Python aplicado", "Programación con Python, funciones, colecciones y archivos.", "Básico"),
+        ("Bases de datos SQL", "Modelado relacional, consultas, joins e integridad.", "Intermedio"),
+        ("Desarrollo web frontend", "HTML, CSS, TypeScript y componentes React.", "Intermedio"),
+        ("Backend y APIs REST", "Diseño de servicios, validación, autenticación y endpoints.", "Intermedio"),
+        ("Estadística aplicada", "Probabilidad, análisis exploratorio y visualización.", "Básico"),
+        ("Introducción a Machine Learning", "Preparación de datos y modelos supervisados.", "Intermedio"),
+        ("Redes neuronales", "Perceptrón multicapa, entrenamiento y evaluación.", "Avanzado"),
+        ("Ingeniería de requisitos", "Historias de usuario, alcance y trazabilidad.", "Intermedio"),
+        ("Experiencia de usuario UX/UI", "Investigación, prototipado y accesibilidad.", "Básico"),
+        ("Ciberseguridad básica", "Principios de seguridad, riesgos y protección de datos.", "Básico"),
+        ("Proyecto integrador", "Planificación, desarrollo, pruebas y documentación.", "Avanzado"),
+    ]
+    demo_courses = [models.Course(
+        organization_id=org, code=f"DEMO-CUR-{i+1:02d}", title=title,
+        description=f"[DEMO] {description}", level=level, status="published"
+    ) for i, (title, description, level) in enumerate(course_specs)]
+    db.add_all(demo_courses)
+    db.flush()
+
+    demo_assessments = []
+    for i, course in enumerate(demo_courses):
+        assessment = models.Assessment(
+            organization_id=org, course_id=course.id,
+            title=f"Evaluación de práctica · {course.title}",
+            max_score=20, status="published", due_date=(datetime.now(timezone.utc) + timedelta(days=14+i)).date().isoformat()
+        )
+        demo_assessments.append(assessment)
+    db.add_all(demo_assessments)
+    db.flush()
+
+    now = datetime.now(timezone.utc)
+    demo_enrollments = []
+    demo_results = []
+    demo_events = []
+    demo_recommendations = []
+    event_types = ["lesson_view", "assessment_submit", "resource_download", "practice_complete"]
+    for i, student in enumerate(demo_students):
+        selected_courses = [(i * 3 + j * 2) % len(demo_courses) for j in range(4)]
+        for j, ci in enumerate(selected_courses):
+            status_value = "completed" if (i + j) % 3 == 0 else ("active" if (i + j) % 3 == 1 else "withdrawn")
+            demo_enrollments.append(models.Enrollment(
+                organization_id=org, student_id=student.id, course_id=demo_courses[ci].id,
+                status=status_value, enrolled_at=now - timedelta(days=30 * ((i + j) % 8))
+            ))
+            score = float(10 + ((i * 3 + ci * 2 + j) % 11))
+            month_offset = (i + ci + j) % 8
+            demo_results.append(models.AssessmentResult(
+                organization_id=org, assessment_id=demo_assessments[ci].id,
+                student_id=student.id, score=score,
+                feedback="[DEMO] Resultado académico de práctica.",
+                graded_at=now - timedelta(days=30 * month_offset + (i % 20))
+            ))
+        for k in range(2):
+            course_index = selected_courses[k]
+            demo_events.append(models.LearningEvent(
+                organization_id=org, student_id=student.id, course_id=demo_courses[course_index].id,
+                event_type=event_types[(i + k) % len(event_types)],
+                description=f"[DEMO] Actividad de práctica en {demo_courses[course_index].title}.",
+                occurred_at=now - timedelta(days=(i * 2 + k) % 45)
+            ))
+        if i % 2 == 0:
+            demo_recommendations.append(models.Recommendation(
+                organization_id=org, student_id=student.id,
+                title="Repasar conceptos clave del curso",
+                rationale="[DEMO] Sugerencia de práctica basada en una calificación simulada; requiere revisión docente.",
+                status="pending", source="demo"
+            ))
+
+    db.add_all(demo_enrollments)
+    db.add_all(demo_results)
+    db.add_all(demo_events)
+    db.add_all(demo_recommendations)
+    for i in range(6):
+        db.add(models.LearningPath(
+            organization_id=org,
+            title=["Ruta de programación inicial", "Ruta de desarrollo web", "Ruta de datos y SQL", "Ruta de Machine Learning", "Ruta de ciberseguridad", "Ruta de proyecto integrador"][i],
+            description="[DEMO] Itinerario de aprendizaje de muestra para validar el módulo de rutas.",
+            level=["Básico", "Intermedio", "Intermedio", "Avanzado", "Básico", "Avanzado"][i],
+            status="published"
+        ))
+    db.add(models.AuditLog(organization_id=org, actor_email=user.email, action="seed_demo_data", resource="demo_academic_records"))
+    db.commit()
+
+    return {
+        "ok": True,
+        "already_loaded": False,
+        "message": "Se agregaron 36 estudiantes DEMO, 12 cursos DEMO, 12 evaluaciones, 144 matrículas, 144 notas, 72 eventos, 18 recomendaciones y 6 rutas. Los datos reales existentes no se modificaron.",
+        "created": {"students": 36, "courses": 12, "assessments": 12, "enrollments": len(demo_enrollments), "results": len(demo_results), "events": len(demo_events), "recommendations": len(demo_recommendations), "learning_paths": 6}
+    }
+
 class RecommendationIn(BaseModel):
     student_id: str
     title: str
@@ -386,7 +544,12 @@ def organization(user=Depends(current_user), db: Session=Depends(get_db)):
 
 @app.get("/api/v1/learning-events")
 def list_events(user=Depends(current_user), db: Session=Depends(get_db)):
-    return db.query(models.LearningEvent).filter_by(organization_id=user.organization_id).order_by(models.LearningEvent.occurred_at.desc()).limit(500).all()
+    events = db.query(models.LearningEvent).filter_by(organization_id=user.organization_id).order_by(models.LearningEvent.occurred_at.desc()).limit(500).all()
+    students = {x.id: x.full_name for x in db.query(models.Student).filter_by(organization_id=user.organization_id).all()}
+    courses = {x.id: x.title for x in db.query(models.Course).filter_by(organization_id=user.organization_id).all()}
+    return [{"id": x.id, "student_id": x.student_id, "student_name": students.get(x.student_id, "Estudiante"),
+             "course_id": x.course_id, "course_title": courses.get(x.course_id, ""), "event_type": x.event_type,
+             "description": x.description, "occurred_at": x.occurred_at} for x in events]
 
 @app.put("/api/v1/students/{item_id}")
 def update_student(item_id: str, data: schemas.StudentIn, user=Depends(require_admin), db: Session=Depends(get_db)):
@@ -601,8 +764,32 @@ async def upload_ml_dataset(file: UploadFile = File(...), user=Depends(current_u
     did = str(uuid.uuid4())
     fname = f"{did}.csv"
     (root / fname).write_bytes(raw)
+    profiles = {}
+    for column in df.columns:
+        series = df[column]
+        examples = []
+        for value in series.dropna().astype(str).unique()[:5].tolist():
+            examples.append(value[:80])
+        profiles[str(column)] = {
+            "dtype": str(series.dtype),
+            "unique_count": int(series.nunique(dropna=True)),
+            "missing": int(series.isna().sum()),
+            "examples": examples,
+        }
+    sample = []
+    for _, row in df.head(8).iterrows():
+        record = {}
+        for column, value in row.items():
+            if pd.isna(value):
+                record[str(column)] = None
+            elif hasattr(value, "item"):
+                record[str(column)] = value.item()
+            else:
+                record[str(column)] = value
+        sample.append(record)
     info = {"id": did, "filename": Path(file.filename).name, "stored_file": fname,
             "rows": int(len(df)), "columns": list(df.columns), "missing": int(df.isna().sum().sum()),
+            "profiles": profiles, "sample": sample,
             "uploaded_at": datetime.now(timezone.utc).isoformat()}
     items = read_json(root / "datasets.json", [])
     items.insert(0, info); write_json(root / "datasets.json", items)
