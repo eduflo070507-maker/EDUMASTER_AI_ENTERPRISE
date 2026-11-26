@@ -739,7 +739,86 @@ def write_json(path: Path, value):
 
 @app.get("/api/v1/ml/datasets")
 def list_ml_datasets(user=Depends(current_user)):
-    return read_json(org_ml_dir(user.organization_id) / "datasets.json", [])
+    """Lista los datasets de la organización e importa el CSV de ejemplo
+    incluido en examples/ la primera vez que se consulta este endpoint.
+    """
+    root = org_ml_dir(user.organization_id)
+    registry = root / "datasets.json"
+    datasets = read_json(registry, [])
+    if not isinstance(datasets, list):
+        datasets = []
+
+    demo_name = "dataset_estudiantes_demo.csv"
+    project_root = Path(__file__).resolve().parents[2]
+    demo_csv = project_root / "examples" / demo_name
+
+    # Evita registrar el dataset de ejemplo más de una vez.
+    already_registered = any(
+        isinstance(item, dict) and item.get("filename") == demo_name
+        for item in datasets
+    )
+
+    if demo_csv.is_file() and not already_registered:
+        try:
+            df = pd.read_csv(demo_csv)
+            if df.empty or len(df.columns) < 2:
+                raise ValueError("El CSV debe contener filas y al menos dos columnas")
+            if len(df) < 20:
+                raise ValueError("El CSV debe contener al menos 20 filas")
+
+            df.columns = [str(column).strip() for column in df.columns]
+            if any(not column for column in df.columns) or len(set(df.columns)) != len(df.columns):
+                raise ValueError("Los nombres de columnas deben ser únicos y no estar vacíos")
+
+            dataset_id = str(uuid.uuid4())
+            stored_filename = f"{dataset_id}.csv"
+            raw = demo_csv.read_bytes()
+            (root / stored_filename).write_bytes(raw)
+
+            profiles = {}
+            for column in df.columns:
+                series = df[column]
+                profiles[str(column)] = {
+                    "dtype": str(series.dtype),
+                    "unique_count": int(series.nunique(dropna=True)),
+                    "missing": int(series.isna().sum()),
+                    "examples": [
+                        str(value)[:80]
+                        for value in series.dropna().astype(str).unique()[:5].tolist()
+                    ],
+                }
+
+            sample = []
+            for _, row in df.head(8).iterrows():
+                record = {}
+                for column, value in row.items():
+                    if pd.isna(value):
+                        record[str(column)] = None
+                    elif hasattr(value, "item"):
+                        record[str(column)] = value.item()
+                    else:
+                        record[str(column)] = value
+                sample.append(record)
+
+            info = {
+                "id": dataset_id,
+                "filename": demo_name,
+                "stored_file": stored_filename,
+                "rows": int(len(df)),
+                "columns": list(df.columns),
+                "missing": int(df.isna().sum().sum()),
+                "profiles": profiles,
+                "sample": sample,
+                "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            }
+            datasets.insert(0, info)
+            write_json(registry, datasets)
+        except Exception as exc:
+            # No se interrumpe la consulta de datasets por un CSV de ejemplo
+            # ausente o inválido; el error queda disponible en el log del backend.
+            print(f"[ML] No se pudo importar {demo_name}: {exc}")
+
+    return datasets
 
 @app.post("/api/v1/ml/datasets")
 async def upload_ml_dataset(file: UploadFile = File(...), user=Depends(current_user)):
