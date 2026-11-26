@@ -13,6 +13,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, classification_report
 from fastapi import FastAPI, Depends, HTTPException, status
+from pydantic import BaseModel, EmailStr, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -104,6 +105,33 @@ def login(data: schemas.LoginIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="Usuario inactivo")
     return {"access_token": create_token(user.email, user.role), "token_type":"bearer",
             "user":{"id":user.id,"full_name":user.full_name,"email":user.email,"role":user.role}}
+
+class AdminRecoveryIn(BaseModel):
+    recovery_key: str = Field(min_length=24)
+    current_email: EmailStr
+    new_email: EmailStr
+    new_password: str = Field(min_length=12, max_length=128)
+
+@app.post("/api/v1/admin/recover-access")
+def recover_admin_access(data: AdminRecoveryIn, db: Session = Depends(get_db)):
+    """One-time administrative recovery protected by an environment secret."""
+    configured_key = os.getenv("ADMIN_RECOVERY_KEY", "")
+    if len(configured_key) < 24:
+        raise HTTPException(status_code=503, detail="La recuperación no está habilitada. Configura ADMIN_RECOVERY_KEY en el backend.")
+    import hmac
+    if not hmac.compare_digest(data.recovery_key, configured_key):
+        raise HTTPException(status_code=403, detail="Clave de recuperación incorrecta")
+    user = db.query(models.User).filter(func.lower(models.User.email) == data.current_email.lower()).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="No existe un usuario con el correo actual indicado")
+    existing = db.query(models.User).filter(func.lower(models.User.email) == data.new_email.lower(), models.User.id != user.id).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="El nuevo correo ya está registrado")
+    user.email = data.new_email.lower()
+    user.password_hash = hash_password(data.new_password)
+    user.is_active = True
+    db.commit()
+    return {"message": "Acceso del administrador actualizado. Ya puedes iniciar sesión.", "email": user.email, "role": user.role}
 
 @app.get("/api/v1/auth/me")
 def me(user=Depends(current_user)):
