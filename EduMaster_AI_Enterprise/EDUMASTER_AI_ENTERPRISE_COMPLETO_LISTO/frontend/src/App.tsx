@@ -6,7 +6,7 @@ import {
   AlertTriangle, MapPinned, Target, Zap, CalendarDays, TrendingUp, X
 } from "lucide-react";
 
-const API = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
+const API = (import.meta.env.VITE_API_URL || "https://edumaster-api-qqyx.onrender.com").replace(/\/$/, "");
 type User = { id: string; full_name: string; email: string; role: string };
 type AnyRow = Record<string, any>;
 
