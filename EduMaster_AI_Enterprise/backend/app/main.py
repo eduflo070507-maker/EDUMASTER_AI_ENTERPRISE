@@ -108,7 +108,7 @@ def login(data: schemas.LoginIn, db: Session = Depends(get_db)):
 
 class AdminRecoveryIn(BaseModel):
     recovery_key: str = Field(min_length=24)
-    current_email: EmailStr
+    current_email: str = Field(min_length=3, max_length=320)
     new_email: EmailStr
     new_password: str = Field(min_length=12, max_length=128)
 
