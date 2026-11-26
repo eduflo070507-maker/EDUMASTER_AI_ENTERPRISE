@@ -29,8 +29,6 @@ app = FastAPI(title="EduMaster.ai Enterprise API", version="1.0.0", description=
 default_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://edumaster-ai-enterprise-1c9x34fzh-eduardo-8949.vercel.app",
-    "https://edumaster-ai-enterprise-six.vercel.app",
 ]
 
 env_origins = os.getenv("CORS_ORIGINS", "")
@@ -41,7 +39,6 @@ origins = [
     if origin.strip()
 ]
 
-# Mantener los orígenes de producción y desarrollo autorizados
 origins = list(set(default_origins + origins))
 
 app.add_middleware(
@@ -54,35 +51,31 @@ app.add_middleware(
 
 oauth2 = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
-def seed():
+def bootstrap_admin():
+    """Create only the first institution administrator from deployment environment."""
+    email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
+    password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
+    org_name = os.getenv("BOOTSTRAP_ORG_NAME", "").strip()
+    org_code = os.getenv("BOOTSTRAP_ORG_CODE", "").strip().upper()
+    if not (email and password and org_name and org_code):
+        return
+    if len(password) < 12:
+        raise RuntimeError("BOOTSTRAP_ADMIN_PASSWORD debe tener al menos 12 caracteres")
     db = SessionLocal()
     try:
-        org = db.query(models.Organization).filter_by(code="DEMO").first()
-        if not org:
-            org = models.Organization(name="Institución EduMaster DEMO", code="DEMO")
-            db.add(org); db.flush()
-        admin = db.query(models.User).filter_by(email="admin@edumaster.ai").first()
-        if not admin:
-            db.add(models.User(organization_id=org.id, full_name="Administrador DEMO",
-                email="admin@edumaster.ai", password_hash=hash_password("EduMaster123!"), role="superadmin"))
-        if db.query(models.Course).count() == 0:
-            db.add_all([
-                models.Course(organization_id=org.id, code="MAT-101", title="Matemática aplicada", description="Fundamentos y resolución de problemas.", level="Básico"),
-                models.Course(organization_id=org.id, code="PROG-201", title="Programación", description="Pensamiento computacional y desarrollo.", level="Intermedio"),
-                models.Course(organization_id=org.id, code="DAT-301", title="Analítica de datos", description="Datos, métricas y modelos.", level="Avanzado")
-            ])
-        if db.query(models.Student).count() == 0:
-            db.add_all([
-                models.Student(organization_id=org.id, student_code="EST-001", full_name="Ana Torres", email="ana.demo@edumaster.local"),
-                models.Student(organization_id=org.id, student_code="EST-002", full_name="Luis Mendoza", email="luis.demo@edumaster.local"),
-                models.Student(organization_id=org.id, student_code="EST-003", full_name="Camila Rojas", email="camila.demo@edumaster.local")
-            ])
-        if db.query(models.ModelVersion).count() == 0:
-            db.add(models.ModelVersion(name="EduMaster Multi-Task Learning Network", description="Ficha DEMO de arquitectura. Aún no entrenada ni aprobada."))
+        if db.query(models.User).count() > 0:
+            return
+        org = models.Organization(name=org_name, code=org_code)
+        db.add(org); db.flush()
+        admin = models.User(organization_id=org.id,
+            full_name=os.getenv("BOOTSTRAP_ADMIN_NAME", "Administrador institucional"),
+            email=email, password_hash=hash_password(password), role="institution_admin")
+        db.add(admin)
         db.commit()
     finally:
         db.close()
-seed()
+
+bootstrap_admin()
 
 def current_user(token: str = Depends(oauth2), db: Session = Depends(get_db)):
     payload = decode_token(token)
@@ -100,7 +93,7 @@ def require_admin(user=Depends(current_user)):
 
 @app.get("/health")
 def health():
-    return {"status":"ok","service":"edumaster-api","mode":"local-demo"}
+    return {"status":"ok","service":"edumaster-api","version":"2.0.0"}
 
 @app.post("/api/v1/auth/login")
 def login(data: schemas.LoginIn, db: Session = Depends(get_db)):
@@ -125,7 +118,9 @@ def dashboard(user=Depends(current_user), db: Session = Depends(get_db)):
         "assessments": db.query(models.Assessment).filter_by(organization_id=org).count(),
         "learning_events": db.query(models.LearningEvent).filter_by(organization_id=org).count(),
         "recommendations": db.query(models.Recommendation).filter_by(organization_id=org).count(),
-        "ai_status":"DEMO - modelo no aprobado"
+        "ai_status":"Sin modelo aprobado",
+        "active_students": db.query(models.Student).filter_by(organization_id=org, status="active").count(),
+        "recent_activity": [{"id": x.id, "event_type": x.event_type, "description": x.description, "occurred_at": x.occurred_at} for x in db.query(models.LearningEvent).filter_by(organization_id=org).order_by(models.LearningEvent.occurred_at.desc()).limit(8).all()]
     }
 
 @app.get("/api/v1/students")
@@ -134,7 +129,7 @@ def list_students(user=Depends(current_user), db: Session=Depends(get_db)):
 
 @app.post("/api/v1/students")
 def create_student(data: schemas.StudentIn, user=Depends(require_admin), db: Session=Depends(get_db)):
-    if db.query(models.Student).filter_by(student_code=data.student_code).first():
+    if db.query(models.Student).filter_by(organization_id=user.organization_id, student_code=data.student_code).first():
         raise HTTPException(409, "El código de estudiante ya existe")
     obj=models.Student(organization_id=user.organization_id, **data.model_dump())
     db.add(obj); db.commit(); db.refresh(obj)
@@ -177,11 +172,236 @@ def recommendations(user=Depends(current_user), db: Session=Depends(get_db)):
 
 @app.get("/api/v1/ml/models")
 def ml_models(user=Depends(current_user), db: Session=Depends(get_db)):
-    return db.query(models.ModelVersion).all()
+    return db.query(models.ModelVersion).filter((models.ModelVersion.organization_id == user.organization_id) | (models.ModelVersion.organization_id == None)).all()
 
 @app.get("/api/v1/audit-logs")
 def audit_logs(user=Depends(require_admin), db: Session=Depends(get_db)):
     return db.query(models.AuditLog).filter_by(organization_id=user.organization_id).order_by(models.AuditLog.occurred_at.desc()).limit(100).all()
+
+
+
+# ---------------- Operaciones académicas ampliadas ----------------
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class PathIn(BaseModel):
+    title: str = Field(min_length=2, max_length=180)
+    description: str = ""
+    level: str = "General"
+    status: str = "draft"
+
+class EnrollmentIn(BaseModel):
+    student_id: str
+    course_id: str
+
+class GradeIn(BaseModel):
+    assessment_id: str
+    student_id: str
+    score: float = Field(ge=0)
+    feedback: str = ""
+
+class RecommendationIn(BaseModel):
+    student_id: str
+    title: str
+    rationale: str = ""
+
+class UserCreateIn(BaseModel):
+    full_name: str
+    email: str
+    password: str = Field(min_length=12)
+    role: str = "teacher"
+
+class CertificateIn(BaseModel):
+    student_id: str
+    course_id: str
+
+class NotificationIn(BaseModel):
+    title: str
+    message: str
+    user_id: Optional[str] = None
+
+ROLE_ADMIN = ("superadmin", "institution_admin", "director")
+
+def audit(db, user, action, resource):
+    db.add(models.AuditLog(organization_id=user.organization_id, actor_email=user.email, action=action, resource=resource))
+
+@app.get("/api/v1/organization")
+def organization(user=Depends(current_user), db: Session=Depends(get_db)):
+    org=db.query(models.Organization).filter_by(id=user.organization_id).first()
+    return {"id":org.id,"name":org.name,"code":org.code,"status":org.status}
+
+@app.get("/api/v1/learning-events")
+def list_events(user=Depends(current_user), db: Session=Depends(get_db)):
+    return db.query(models.LearningEvent).filter_by(organization_id=user.organization_id).order_by(models.LearningEvent.occurred_at.desc()).limit(500).all()
+
+@app.put("/api/v1/students/{item_id}")
+def update_student(item_id: str, data: schemas.StudentIn, user=Depends(require_admin), db: Session=Depends(get_db)):
+    obj=db.query(models.Student).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404,"Estudiante no encontrado")
+    for k,v in data.model_dump().items(): setattr(obj,k,v)
+    audit(db,user,"update","student"); db.commit(); db.refresh(obj); return obj
+
+@app.delete("/api/v1/students/{item_id}", status_code=204)
+def delete_student(item_id: str, user=Depends(require_admin), db: Session=Depends(get_db)):
+    obj=db.query(models.Student).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404,"Estudiante no encontrado")
+    if db.query(models.Enrollment).filter_by(student_id=item_id).count() or db.query(models.AssessmentResult).filter_by(student_id=item_id).count():
+        obj.status="inactive"
+    else: db.delete(obj)
+    audit(db,user,"delete_or_deactivate","student"); db.commit()
+
+@app.put("/api/v1/courses/{item_id}")
+def update_course(item_id: str, data: schemas.CourseIn, user=Depends(require_admin), db: Session=Depends(get_db)):
+    obj=db.query(models.Course).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404,"Curso no encontrado")
+    for k,v in data.model_dump().items(): setattr(obj,k,v)
+    audit(db,user,"update","course"); db.commit(); db.refresh(obj); return obj
+
+@app.delete("/api/v1/courses/{item_id}", status_code=204)
+def delete_course(item_id: str, user=Depends(require_admin), db: Session=Depends(get_db)):
+    obj=db.query(models.Course).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404,"Curso no encontrado")
+    if db.query(models.Enrollment).filter_by(course_id=item_id).count() or db.query(models.Assessment).filter_by(course_id=item_id).count(): obj.status="archived"
+    else: db.delete(obj)
+    audit(db,user,"delete_or_archive","course"); db.commit()
+
+@app.put("/api/v1/assessments/{item_id}")
+def update_assessment(item_id: str, data: schemas.AssessmentIn, user=Depends(require_admin), db: Session=Depends(get_db)):
+    obj=db.query(models.Assessment).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404,"Evaluación no encontrada")
+    if not db.query(models.Course).filter_by(id=data.course_id, organization_id=user.organization_id).first(): raise HTTPException(404,"Curso no encontrado")
+    for k,v in data.model_dump().items(): setattr(obj,k,v)
+    audit(db,user,"update","assessment"); db.commit(); db.refresh(obj); return obj
+
+@app.delete("/api/v1/assessments/{item_id}", status_code=204)
+def delete_assessment(item_id: str, user=Depends(require_admin), db: Session=Depends(get_db)):
+    obj=db.query(models.Assessment).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404,"Evaluación no encontrada")
+    if db.query(models.AssessmentResult).filter_by(assessment_id=item_id).count(): obj.status="archived"
+    else: db.delete(obj)
+    audit(db,user,"delete_or_archive","assessment"); db.commit()
+
+@app.get("/api/v1/enrollments")
+def list_enrollments(user=Depends(current_user), db: Session=Depends(get_db)):
+    return db.query(models.Enrollment).filter_by(organization_id=user.organization_id).order_by(models.Enrollment.enrolled_at.desc()).all()
+
+@app.post("/api/v1/enrollments")
+def enroll(data: EnrollmentIn, user=Depends(require_admin), db: Session=Depends(get_db)):
+    student=db.query(models.Student).filter_by(id=data.student_id, organization_id=user.organization_id).first()
+    course=db.query(models.Course).filter_by(id=data.course_id, organization_id=user.organization_id).first()
+    if not student or not course: raise HTTPException(404,"Estudiante o curso no encontrado")
+    if db.query(models.Enrollment).filter_by(student_id=data.student_id, course_id=data.course_id).first(): raise HTTPException(409,"El estudiante ya está matriculado en este curso")
+    obj=models.Enrollment(organization_id=user.organization_id, **data.model_dump()); db.add(obj); audit(db,user,"enroll","enrollment"); db.commit(); db.refresh(obj); return obj
+
+@app.patch("/api/v1/enrollments/{item_id}/status")
+def update_enrollment_status(item_id: str, status_value: str, user=Depends(require_admin), db: Session=Depends(get_db)):
+    if status_value not in ("active", "completed", "withdrawn"):
+        raise HTTPException(400, "Estado no válido")
+    obj=db.query(models.Enrollment).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404, "Matrícula no encontrada")
+    obj.status=status_value; audit(db,user,"update_status","enrollment"); db.commit(); db.refresh(obj); return obj
+
+@app.get("/api/v1/results")
+def list_results(user=Depends(current_user), db: Session=Depends(get_db)):
+    return db.query(models.AssessmentResult).filter_by(organization_id=user.organization_id).order_by(models.AssessmentResult.graded_at.desc()).all()
+
+@app.post("/api/v1/results")
+def create_result(data: GradeIn, user=Depends(current_user), db: Session=Depends(get_db)):
+    assessment=db.query(models.Assessment).filter_by(id=data.assessment_id, organization_id=user.organization_id).first()
+    student=db.query(models.Student).filter_by(id=data.student_id, organization_id=user.organization_id).first()
+    if not assessment or not student: raise HTTPException(404,"Evaluación o estudiante no encontrado")
+    if data.score > assessment.max_score: raise HTTPException(400,"La nota supera el puntaje máximo")
+    obj=models.AssessmentResult(organization_id=user.organization_id, **data.model_dump()); db.add(obj); audit(db,user,"grade","assessment_result"); db.commit(); db.refresh(obj); return obj
+
+@app.get("/api/v1/learning-paths")
+def list_paths(user=Depends(current_user), db: Session=Depends(get_db)):
+    return db.query(models.LearningPath).filter_by(organization_id=user.organization_id).order_by(models.LearningPath.created_at.desc()).all()
+
+@app.post("/api/v1/learning-paths")
+def create_path(data: PathIn, user=Depends(require_admin), db: Session=Depends(get_db)):
+    obj=models.LearningPath(organization_id=user.organization_id, **data.model_dump()); db.add(obj); audit(db,user,"create","learning_path"); db.commit(); db.refresh(obj); return obj
+
+@app.put("/api/v1/learning-paths/{item_id}")
+def update_path(item_id: str, data: PathIn, user=Depends(require_admin), db: Session=Depends(get_db)):
+    obj=db.query(models.LearningPath).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404,"Ruta no encontrada")
+    for k,v in data.model_dump().items(): setattr(obj,k,v)
+    audit(db,user,"update","learning_path"); db.commit(); db.refresh(obj); return obj
+
+@app.delete("/api/v1/learning-paths/{item_id}", status_code=204)
+def delete_path(item_id: str, user=Depends(require_admin), db: Session=Depends(get_db)):
+    obj=db.query(models.LearningPath).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404,"Ruta no encontrada")
+    db.delete(obj); audit(db,user,"delete","learning_path"); db.commit()
+
+@app.post("/api/v1/recommendations")
+def create_recommendation(data: RecommendationIn, user=Depends(current_user), db: Session=Depends(get_db)):
+    if not db.query(models.Student).filter_by(id=data.student_id, organization_id=user.organization_id).first(): raise HTTPException(404,"Estudiante no encontrado")
+    obj=models.Recommendation(organization_id=user.organization_id, student_id=data.student_id, title=data.title, rationale=data.rationale, source="manual_review")
+    db.add(obj); audit(db,user,"create","recommendation"); db.commit(); db.refresh(obj); return obj
+
+@app.patch("/api/v1/recommendations/{item_id}")
+def update_recommendation(item_id: str, data: schemas.RecommendationFeedback, user=Depends(current_user), db: Session=Depends(get_db)):
+    if data.status not in ("pending","accepted","dismissed","completed"): raise HTTPException(400,"Estado no válido")
+    obj=db.query(models.Recommendation).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404,"Recomendación no encontrada")
+    obj.status=data.status; audit(db,user,"update_status","recommendation"); db.commit(); db.refresh(obj); return obj
+
+@app.get("/api/v1/certificates")
+def list_certificates(user=Depends(current_user), db: Session=Depends(get_db)):
+    return db.query(models.Certificate).filter_by(organization_id=user.organization_id).order_by(models.Certificate.issued_at.desc()).all()
+
+@app.post("/api/v1/certificates")
+def issue_certificate(data: CertificateIn, user=Depends(require_admin), db: Session=Depends(get_db)):
+    student=db.query(models.Student).filter_by(id=data.student_id, organization_id=user.organization_id).first()
+    course=db.query(models.Course).filter_by(id=data.course_id, organization_id=user.organization_id).first()
+    if not student or not course: raise HTTPException(404,"Estudiante o curso no encontrado")
+    if not db.query(models.Enrollment).filter_by(student_id=data.student_id, course_id=data.course_id, status="completed").first(): raise HTTPException(400,"La matrícula debe estar completada para emitir el certificado")
+    code="EM-"+uuid.uuid4().hex[:12].upper()
+    obj=models.Certificate(organization_id=user.organization_id, student_id=data.student_id, course_id=data.course_id, certificate_code=code)
+    db.add(obj); audit(db,user,"issue","certificate"); db.commit(); db.refresh(obj); return obj
+
+@app.get("/api/v1/certificates/verify/{certificate_code}")
+def verify_certificate(certificate_code: str, db: Session=Depends(get_db)):
+    obj=db.query(models.Certificate).filter_by(certificate_code=certificate_code, status="issued").first()
+    if not obj: raise HTTPException(404,"Certificado no válido")
+    student=db.query(models.Student).filter_by(id=obj.student_id).first(); course=db.query(models.Course).filter_by(id=obj.course_id).first()
+    return {"valid":True,"certificate_code":obj.certificate_code,"student_name":student.full_name,"course_title":course.title,"issued_at":obj.issued_at}
+
+@app.get("/api/v1/notifications")
+def list_notifications(user=Depends(current_user), db: Session=Depends(get_db)):
+    return db.query(models.Notification).filter(models.Notification.organization_id==user.organization_id, (models.Notification.user_id==None) | (models.Notification.user_id==user.id)).order_by(models.Notification.created_at.desc()).limit(100).all()
+
+@app.post("/api/v1/notifications")
+def create_notification(data: NotificationIn, user=Depends(require_admin), db: Session=Depends(get_db)):
+    if data.user_id and not db.query(models.User).filter_by(id=data.user_id, organization_id=user.organization_id).first(): raise HTTPException(404,"Usuario no encontrado")
+    obj=models.Notification(organization_id=user.organization_id, **data.model_dump()); db.add(obj); audit(db,user,"create","notification"); db.commit(); db.refresh(obj); return obj
+
+@app.patch("/api/v1/notifications/{item_id}/read")
+def read_notification(item_id: str, user=Depends(current_user), db: Session=Depends(get_db)):
+    obj=db.query(models.Notification).filter(models.Notification.id==item_id, models.Notification.organization_id==user.organization_id, (models.Notification.user_id==None) | (models.Notification.user_id==user.id)).first()
+    if not obj: raise HTTPException(404,"Notificación no encontrada")
+    obj.read_at=datetime.now(timezone.utc); db.commit(); return {"ok":True}
+
+@app.get("/api/v1/users")
+def list_users(user=Depends(require_admin), db: Session=Depends(get_db)):
+    return [{"id":x.id,"full_name":x.full_name,"email":x.email,"role":x.role,"is_active":x.is_active,"created_at":x.created_at} for x in db.query(models.User).filter_by(organization_id=user.organization_id).order_by(models.User.full_name).all()]
+
+@app.post("/api/v1/users")
+def create_user(data: UserCreateIn, user=Depends(require_admin), db: Session=Depends(get_db)):
+    allowed={"institution_admin","director","teacher","student","analyst"}
+    if data.role not in allowed: raise HTTPException(400,"Rol no permitido")
+    email=data.email.strip().lower()
+    if db.query(models.User).filter_by(email=email).first(): raise HTTPException(409,"El correo ya está registrado")
+    obj=models.User(organization_id=user.organization_id, full_name=data.full_name, email=email, password_hash=hash_password(data.password), role=data.role)
+    db.add(obj); audit(db,user,"create","user"); db.commit(); db.refresh(obj); return {"id":obj.id,"full_name":obj.full_name,"email":obj.email,"role":obj.role}
+
+@app.patch("/api/v1/users/{item_id}/status")
+def set_user_status(item_id: str, active: bool, user=Depends(require_admin), db: Session=Depends(get_db)):
+    obj=db.query(models.User).filter_by(id=item_id, organization_id=user.organization_id).first()
+    if not obj: raise HTTPException(404,"Usuario no encontrado")
+    if obj.id==user.id and not active: raise HTTPException(400,"No puedes desactivar tu propia cuenta")
+    obj.is_active=active; audit(db,user,"change_status","user"); db.commit(); return {"ok":True,"is_active":obj.is_active}
 
 
 # ---------------- Laboratorio ML: datasets y redes neuronales entrenables ----------------
