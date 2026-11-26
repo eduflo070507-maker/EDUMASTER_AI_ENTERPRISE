@@ -23,8 +23,34 @@ from .security import hash_password, verify_password, create_token, decode_token
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="EduMaster.ai Enterprise API", version="1.0.0", description="API inicial integrada de EduMaster.ai")
-origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# ---------------- Configuración CORS ----------------
+
+default_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://edumaster-ai-enterprise-1c9x34fzh-eduardo-8949.vercel.app",
+]
+
+env_origins = os.getenv("CORS_ORIGINS", "")
+
+origins = [
+    origin.strip().rstrip("/")
+    for origin in env_origins.split(",")
+    if origin.strip()
+]
+
+# Mantener los orígenes de producción y desarrollo autorizados
+origins = list(set(default_origins + origins))
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 oauth2 = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 def seed():
