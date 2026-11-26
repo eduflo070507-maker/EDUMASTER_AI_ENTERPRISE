@@ -17,12 +17,51 @@ from pydantic import BaseModel, EmailStr, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text, inspect
 from .database import Base, engine, get_db, SessionLocal
 from . import models, schemas
 from .security import hash_password, verify_password, create_token, decode_token
 
 Base.metadata.create_all(bind=engine)
+
+
+def ensure_model_versions_organization_column():
+    """
+    Actualiza de forma no destructiva instalaciones existentes.
+    create_all() no agrega columnas a tablas que ya existen; por eso
+    incorporamos organization_id si falta, sin eliminar ni recrear datos.
+    """
+    inspector = inspect(engine)
+    if "model_versions" not in inspector.get_table_names():
+        return
+
+    existing_columns = {
+        column["name"]
+        for column in inspector.get_columns("model_versions")
+    }
+
+    if "organization_id" not in existing_columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE model_versions "
+                    "ADD COLUMN organization_id VARCHAR(36)"
+                )
+            )
+
+    # Índice para que el filtro por institución sea eficiente.
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_model_versions_organization_id "
+                "ON model_versions (organization_id)"
+            )
+        )
+
+
+ensure_model_versions_organization_column()
+
 app = FastAPI(title="EduMaster.ai Enterprise API", version="1.0.0", description="API inicial integrada de EduMaster.ai")
 
 # ---------------- Configuración CORS ----------------
