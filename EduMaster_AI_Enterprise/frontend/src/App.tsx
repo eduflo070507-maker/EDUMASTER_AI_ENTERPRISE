@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Activity, BookOpen, BrainCircuit, Users, GraduationCap, ChartNoAxesCombined,
   Settings, ShieldCheck, Award, Bell, Search, LogOut, Menu, Network, Database,
-  Sparkles, ChevronRight, Plus, RefreshCw, Layers3, Clock3, CheckCircle2,
+  Sparkles, ChevronRight, Plus, RefreshCw, Layers3, Clock3, CheckCircle2, Pencil, Trash2,
   AlertTriangle, MapPinned, Target, Zap, CalendarDays, TrendingUp, X
 } from "lucide-react";
 
@@ -15,6 +15,8 @@ const nav = [
   ["Estudiantes", "students", Users],
   ["Cursos", "courses", BookOpen],
   ["Evaluaciones", "assessments", GraduationCap],
+  ["Matrículas", "enrollments", Users],
+  ["Rutas formativas", "paths", Layers3],
   ["Seguimiento", "tracking", Activity],
   ["Analítica", "analytics", ChartNoAxesCombined],
   ["Arquitectura IA", "neural", BrainCircuit],
@@ -31,6 +33,8 @@ const descriptions: Record<string, string> = {
   students: "Identidad académica y estado de estudiantes.",
   courses: "Gestión del catálogo académico y contenidos formativos.",
   assessments: "Evaluaciones e instrumentos asociados a los cursos.",
+  enrollments: "Gestión de matrículas y estados de participación.",
+  paths: "Diseño y administración de itinerarios formativos.",
   tracking: "Eventos y evidencias del proceso de aprendizaje.",
   analytics: "Indicadores derivados de los datos registrados.",
   neural: "Topología multitarea y rutas de procesamiento neuronal.",
@@ -59,6 +63,7 @@ function App() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [mobile, setMobile] = useState(false);
+  const [orgName, setOrgName] = useState("Institución educativa");
 
   const api = async (path: string, opts: RequestInit = {}) => {
     const response = await fetch(`${API}${path}`, {
@@ -87,6 +92,8 @@ function App() {
       });
   }, [token]);
 
+  useEffect(() => { if (token) api("/api/v1/organization").then((x: any) => setOrgName(x.name)).catch(() => {}); }, [token]);
+
   const reload = async () => {
     if (!token) return;
     const endpoints: Record<string, string> = {
@@ -94,6 +101,11 @@ function App() {
       students: "/api/v1/students",
       courses: "/api/v1/courses",
       assessments: "/api/v1/assessments",
+      enrollments: "/api/v1/enrollments",
+      paths: "/api/v1/learning-paths",
+      tracking: "/api/v1/learning-events",
+      certificates: "/api/v1/certificates",
+      admin: "/api/v1/users",
       recommendations: "/api/v1/recommendations",
       models: "/api/v1/ml/models",
       audit: "/api/v1/audit-logs",
@@ -104,6 +116,10 @@ function App() {
     try {
       const result = await api(endpoints[page]);
       setData((current) => ({ ...current, [page]: result }));
+      if (page === "assessments" || page === "enrollments" || page === "certificates") {
+        const [students, courses, assessments] = await Promise.all([api("/api/v1/students"), api("/api/v1/courses"), api("/api/v1/assessments")]);
+        setData((current) => ({ ...current, students, courses, assessments }));
+      }
     } catch (e: any) {
       setError(e.message || "No se pudo cargar la información.");
     } finally {
@@ -138,7 +154,7 @@ function App() {
           <div><b>EduMaster<span>.ai</span></b><small>ENTERPRISE LEARNING</small></div>
           <button className="mobile-close" onClick={() => setMobile(false)} aria-label="Cerrar menú"><X size={18} /></button>
         </div>
-        <div className="org"><span className="live-dot" /> INSTITUCIÓN DEMO <span className="orgtag">ONLINE</span></div>
+        <div className="org"><span className="live-dot" /> {orgName.toLocaleUpperCase()} <span className="orgtag">ACTIVA</span></div>
         <div className="navlabel">PLATAFORMA</div>
         <nav>
           {nav.map(([label, id, Icon]) => (
@@ -180,15 +196,17 @@ function App() {
           {page === "students" && <DataPage title="Estudiantes registrados" subtitle="Directorio académico de la institución." items={asArray(data.students)} kind="students" api={api} refresh={reload} />}
           {page === "courses" && <DataPage title="Catálogo de cursos" subtitle="Oferta académica y contenidos formativos." items={asArray(data.courses)} kind="courses" api={api} refresh={reload} />}
           {page === "assessments" && <DataPage title="Evaluaciones" subtitle="Instrumentos de evaluación asociados a cursos." items={asArray(data.assessments)} kind="assessments" api={api} refresh={reload} courses={asArray(data.courses)} />}
-          {page === "tracking" && <InfoPanel icon={<Activity />} title="Seguimiento del aprendizaje" text="Registra eventos académicos válidos para construir el historial de progreso."><EventForm students={asArray(data.students)} api={api} /></InfoPanel>}
+          {page === "enrollments" && <EnrollmentPage items={asArray(data.enrollments)} students={asArray(data.students)} courses={asArray(data.courses)} api={api} refresh={reload} />}
+          {page === "paths" && <PathsPage items={asArray(data.paths)} api={api} refresh={reload} />}
+          {page === "tracking" && <div className="grid2"><InfoPanel icon={<Activity />} title="Registrar actividad" text="Registra eventos académicos vinculados a estudiantes."><EventForm students={asArray(data.students)} api={api} /></InfoPanel><div className="panel"><div className="panelhead"><div><h3>Historial de actividad</h3><p>Eventos registrados en la institución</p></div><Activity /></div>{asArray(data.tracking).map((x: any) => <div className="auditrow" key={x.id}><Activity /><b>{x.event_type}</b><span>{x.description}</span><time>{x.occurred_at ? new Date(x.occurred_at).toLocaleString() : ""}</time></div>)}{!asArray(data.tracking).length && <div className="empty">No hay eventos registrados.</div>}</div></div>}
           {page === "analytics" && <Analytics data={data.dashboard || {}} />}
           {page === "neural" && <Neural />}
           {page === "models" && <Models items={asArray(data.models)} />}
           {page === "lab" && <MLLab token={token} apiBase={API} />}
-          {page === "recommendations" && <InfoPanel icon={<Sparkles />} title="Motor de recomendaciones" text="Las recomendaciones combinan señales del modelo con reglas académicas, prerrequisitos, disponibilidad y revisión docente."><div className="demo-note">Las recomendaciones reales aparecerán cuando el backend disponga de resultados generados y un modelo aprobado.</div></InfoPanel>}
-          {page === "certificates" && <InfoPanel icon={<Award />} title="Certificaciones" text="La emisión debe validar criterios oficiales de finalización, evitar duplicados y registrar folio, emisor y verificación QR."><div className="demo-note">Módulo preparado para integrar emisión PDF, folio y verificación QR.</div></InfoPanel>}
+          {page === "recommendations" && <InfoPanel icon={<Sparkles />} title="Motor de recomendaciones" text="Las recomendaciones combinan señales del modelo con reglas académicas, prerrequisitos, disponibilidad y revisión docente."><div className="notice-note">Las recomendaciones reales aparecerán cuando el backend disponga de resultados generados y un modelo aprobado.</div></InfoPanel>}
+          {page === "certificates" && <CertificatesPage items={asArray(data.certificates)} students={asArray(data.students)} courses={asArray(data.courses)} api={api} refresh={reload} />}
           {page === "audit" && <Audit items={asArray(data.audit)} />}
-          {page === "admin" && <InfoPanel icon={<Settings />} title="Administración de la plataforma" text="Gestión inicial de roles y entorno. El control de permisos se valida en el backend."><div className="grid3"><Stat label="Sesión" value="Autenticada" hint="JWT activo" /><Stat label="Rol actual" value={user?.role || "—"} hint="Asignado en backend" /><Stat label="Organización" value="DEMO" hint="Entorno institucional" /></div></InfoPanel>}
+          {page === "admin" && <AdminPage items={asArray(data.admin)} user={user} orgName={orgName} api={api} refresh={reload} />}
         </div>
       </main>
     </div>
@@ -198,8 +216,8 @@ function App() {
 function asArray(value: any): AnyRow[] { return Array.isArray(value) ? value : value?.items || value?.data || []; }
 
 function Login({ onLogin }: { onLogin: (token: string, user: User) => void }) {
-  const [email, setEmail] = useState("admin@edumaster.ai");
-  const [password, setPassword] = useState("EduMaster123!");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(e: React.FormEvent) {
@@ -224,14 +242,14 @@ function Login({ onLogin }: { onLogin: (token: string, user: User) => void }) {
         <div className="loginfoot">LEARNING INTELLIGENCE PLATFORM <span>•</span> ENTERPRISE EDITION</div>
       </div>
       <div className="loginform"><div className="formbox">
-        <div className="eyebrow">BIENVENIDO DE NUEVO</div><h2>Iniciar sesión</h2><p>Accede a tu espacio de trabajo institucional.</p>
+        <div className="eyebrow">ACCESO INSTITUCIONAL</div><h2>Iniciar sesión</h2><p>Accede a tu espacio de trabajo institucional.</p>
         <form onSubmit={submit}>
           <label>Correo institucional</label><input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="username" required />
           <label>Contraseña</label><input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" required />
           {error && <div className="alert"><AlertTriangle size={15} />{error}</div>}
           <button className="primary full" disabled={busy}>{busy ? "Validando…" : "Ingresar a la plataforma"} <ChevronRight size={17} /></button>
         </form>
-        <div className="loginhint"><b>Acceso DEMO</b><br />Correo: admin@edumaster.ai<br />Contraseña: la configurada para el administrador en el backend.</div>
+        <div className="loginhint">Utiliza las credenciales del administrador institucional configuradas durante la instalación.</div>
         <small className="muted">Conexión segura mediante autenticación JWT.</small>
       </div></div>
     </div>
@@ -275,7 +293,7 @@ function Dashboard({ data, setPage }: any) {
       </div>
       <div className="panel recommendations-panel">
         <div className="panelhead"><div><h3>Recomendaciones de IA</h3><p>Sugerencias disponibles desde el servicio</p></div><Sparkles /></div>
-        {recommendations.length ? recommendations.slice(0, 5).map((x: any, i: number) => <div className="recommend-row" key={x.id || i}><span className="recommend-icon"><Zap size={15} /></span><div><b>{x.title || x.name || "Recomendación"}</b><small>{x.description || x.reason || "Sugerencia académica"}</small></div></div>) : <EmptyChart message="No hay recomendaciones generadas." detail="No se muestran sugerencias inventadas ni predicciones de demostración." />}
+        {recommendations.length ? recommendations.slice(0, 5).map((x: any, i: number) => <div className="recommend-row" key={x.id || i}><span className="recommend-icon"><Zap size={15} /></span><div><b>{x.title || x.name || "Recomendación"}</b><small>{x.description || x.reason || "Sugerencia académica"}</small></div></div>) : <EmptyChart message="No hay recomendaciones generadas." detail="No se muestran sugerencias sin evidencia registrada." />}
       </div>
       <div className="panel activity-panel">
         <div className="panelhead"><div><h3>Actividad reciente</h3><p>Últimos eventos registrados</p></div><button className="textlink" onClick={() => setPage("tracking")}>Ver seguimiento <ChevronRight size={14} /></button></div>
@@ -289,7 +307,7 @@ function Dashboard({ data, setPage }: any) {
       <div className="panel"><div className="panelhead"><div><h3>Principios de IA responsable</h3><p>Controles del proyecto</p></div><ShieldCheck /></div>
         <div className="principle"><CheckCircle2 /><span>Predicciones como estimaciones, no certezas.</span></div>
         <div className="principle"><CheckCircle2 /><span>Riesgo orientado a acompañamiento humano.</span></div>
-        <div className="principle"><CheckCircle2 /><span>Datos DEMO no validan calidad educativa.</span></div>
+        <div className="principle"><CheckCircle2 /><span>Los datos deben validarse antes de generar indicadores educativos.</span></div>
       </div>
     </section>
   </>;
@@ -316,7 +334,7 @@ function Neural() {
     <div className="neuralintro"><div><span className="eyebrow">AI PLATFORM / NEURAL LAB</span><h2>Arquitecturas neuronales EduMaster.ai</h2><p>Selecciona una red. Solo la arquitectura elegida se muestra activa.</p></div><span className="pill amber">MODO CONTROLADO</span></div>
     <div className="panel"><div className="panelhead"><div><h3>Catálogo de seis redes</h3><p>Diseños conceptuales de las tareas educativas.</p></div><span className="pill green">{head ? "1 SELECCIONADA" : "0 ACTIVAS"}</span></div><div className="headcards">{networkHeads.map((x) => <button key={x.id} onClick={() => { setActive(x.id); setPlaying(false); }} className={`headcard ${active === x.id ? "chosen" : ""}`} style={{ "--route": x.color } as any}><div className="headcardtop"><span>RED {x.id}</span><span className={`pill ${active === x.id ? "green" : "gray"}`}>{active === x.id ? "ENCENDIDA" : "APAGADA"}</span></div><b>{x.name}</b><small>{x.desc}</small></button>)}</div></div>
     <div className="panel neuralcanvas"><div className="canvashead"><div><b>{head?.name || "Ninguna red seleccionada"}</b><small>{head?.desc || "Selecciona una arquitectura del catálogo."}</small></div>{head && <div className="canvascontrols"><button className="outline small" onClick={() => setPlaying(!playing)}>{playing ? "Pausar animación" : "Encender visualización"}</button><button className="outline small" onClick={() => { setActive(""); setPlaying(false); }}>Apagar red</button></div>}</div>
-      {head ? <><svg className={`network-svg ${playing ? "animate" : ""}`} viewBox="0 0 980 310" role="img" aria-label={`Topología de ${head.name}`}>{positions.slice(0, -1).flatMap((col, ci) => col.flatMap((p) => positions[ci + 1].map((q, qi) => <line key={`${ci}-${p.x}-${p.y}-${qi}`} x1={p.x + 8} y1={p.y} x2={q.x - 8} y2={q.y} className="wire selected" style={{ "--route": head.color } as any} />)))}{positions.map((col, ci) => col.map((p, ni) => <circle key={`${ci}-${ni}`} cx={p.x} cy={p.y} r="8" className="node temporal" style={{ "--route": head.color } as any} />))}{columns.map((_, i) => <text key={i} x={45 + i * (890 / Math.max(columns.length - 1, 1))} y="300" textAnchor="middle" className="svglabel">{i === 0 ? "ENTRADA" : i === columns.length - 1 ? "SALIDA" : `CAPA OCULTA ${i}`}</text>)}</svg><div className="inspectgrid"><div className="panel"><h3>Inspector de arquitectura</h3><div className="inspectrow"><span>Entradas</span><b>{head.inputs.join(", ")}</b></div>{head.hidden.map((n, i) => <div className="inspectrow" key={i}><span>Capa oculta {i + 1}</span><b>{n} neuronas · ReLU (diseño)</b></div>)}<div className="inspectrow"><span>Salida</span><b>{head.output}</b></div></div><div className="panel"><h3>Explicación funcional</h3><p className="muted">Las entradas se transforman mediante capas ocultas. Cada neurona combina señales usando pesos y una función de activación para producir la salida definida para la tarea.</p><div className="demo-note"><AlertTriangle size={15} /> La animación representa el flujo visual; no demuestra entrenamiento ni inferencia real.</div></div></div></> : <div className="empty"><BrainCircuit size={38} />Selecciona una red para visualizar sus capas y conexiones.</div>}
+      {head ? <><svg className={`network-svg ${playing ? "animate" : ""}`} viewBox="0 0 980 310" role="img" aria-label={`Topología de ${head.name}`}>{positions.slice(0, -1).flatMap((col, ci) => col.flatMap((p) => positions[ci + 1].map((q, qi) => <line key={`${ci}-${p.x}-${p.y}-${qi}`} x1={p.x + 8} y1={p.y} x2={q.x - 8} y2={q.y} className="wire selected" style={{ "--route": head.color } as any} />)))}{positions.map((col, ci) => col.map((p, ni) => <circle key={`${ci}-${ni}`} cx={p.x} cy={p.y} r="8" className="node temporal" style={{ "--route": head.color } as any} />))}{columns.map((_, i) => <text key={i} x={45 + i * (890 / Math.max(columns.length - 1, 1))} y="300" textAnchor="middle" className="svglabel">{i === 0 ? "ENTRADA" : i === columns.length - 1 ? "SALIDA" : `CAPA OCULTA ${i}`}</text>)}</svg><div className="inspectgrid"><div className="panel"><h3>Inspector de arquitectura</h3><div className="inspectrow"><span>Entradas</span><b>{head.inputs.join(", ")}</b></div>{head.hidden.map((n, i) => <div className="inspectrow" key={i}><span>Capa oculta {i + 1}</span><b>{n} neuronas · ReLU (diseño)</b></div>)}<div className="inspectrow"><span>Salida</span><b>{head.output}</b></div></div><div className="panel"><h3>Explicación funcional</h3><p className="muted">Las entradas se transforman mediante capas ocultas. Cada neurona combina señales usando pesos y una función de activación para producir la salida definida para la tarea.</p><div className="notice-note"><AlertTriangle size={15} /> La animación representa el flujo visual; no demuestra entrenamiento ni inferencia real.</div></div></div></> : <div className="empty"><BrainCircuit size={38} />Selecciona una red para visualizar sus capas y conexiones.</div>}
     </div>
   </div>;
 }
@@ -325,6 +343,7 @@ function DataPage({ title, subtitle, items, kind, api, refresh, courses = [] }: 
   const [show, setShow] = useState(false);
   const [form, setForm] = useState<AnyRow>({});
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   async function save(e: React.FormEvent) {
     e.preventDefault(); setSaving(true);
     try {
@@ -333,23 +352,37 @@ function DataPage({ title, subtitle, items, kind, api, refresh, courses = [] }: 
         : kind === "courses"
           ? { code: form.code, title: form.title, description: form.description || "", level: form.level || "General", status: "published" }
           : { course_id: form.course_id, title: form.title, max_score: Number(form.max_score || 20), status: "draft", due_date: form.due_date || "" };
-      await api(`/api/v1/${kind}`, { method: "POST", body: JSON.stringify(body) });
-      setShow(false); setForm({}); await refresh();
+      await api(editingId ? `/api/v1/${kind}/${editingId}` : `/api/v1/${kind}`, { method: editingId ? "PUT" : "POST", body: JSON.stringify(body) });
+      setShow(false); setForm({}); setEditingId(null); await refresh();
     } catch (e: any) { alert(e.message); }
     finally { setSaving(false); }
   }
-  return <div className="panel tablepanel"><div className="panelhead"><div><h3>{title}</h3><p>{subtitle}</p></div><button className="primary" onClick={() => setShow(!show)}><Plus size={16} /> Nuevo registro</button></div>
+  return <div className="panel tablepanel"><div className="panelhead"><div><h3>{title}</h3><p>{subtitle}</p></div><button className="primary" onClick={() => { setShow(!show); setEditingId(null); setForm({}); }}><Plus size={16} /> Nuevo registro</button></div>
     {show && <form className="inlineform" onSubmit={save}>
       {kind === "students" ? <><input placeholder="Código" required value={form.code || ""} onChange={(e) => setForm({ ...form, code: e.target.value })} /><input placeholder="Nombre completo" required value={form.name || ""} onChange={(e) => setForm({ ...form, name: e.target.value })} /><input placeholder="Correo" type="email" value={form.email || ""} onChange={(e) => setForm({ ...form, email: e.target.value })} /></> :
         kind === "courses" ? <><input placeholder="Código" required value={form.code || ""} onChange={(e) => setForm({ ...form, code: e.target.value })} /><input placeholder="Nombre del curso" required value={form.title || ""} onChange={(e) => setForm({ ...form, title: e.target.value })} /><input placeholder="Nivel" value={form.level || ""} onChange={(e) => setForm({ ...form, level: e.target.value })} /></> :
           <><select required value={form.course_id || ""} onChange={(e) => setForm({ ...form, course_id: e.target.value })}><option value="">Seleccionar curso</option>{courses.map((c: any) => <option key={c.id} value={c.id}>{c.title}</option>)}</select><input placeholder="Título de evaluación" required value={form.title || ""} onChange={(e) => setForm({ ...form, title: e.target.value })} /><input type="number" placeholder="Puntaje máximo" value={form.max_score || "20"} onChange={(e) => setForm({ ...form, max_score: e.target.value })} /></>}
-      <button className="primary" disabled={saving}>{saving ? "Guardando…" : "Guardar"}</button><button type="button" className="outline" onClick={() => setShow(false)}>Cancelar</button>
+      <button className="primary" disabled={saving}>{saving ? "Guardando…" : editingId ? "Actualizar" : "Guardar"}</button><button type="button" className="outline" onClick={() => { setShow(false); setEditingId(null); }}>Cancelar</button>
     </form>}
-    <div className="tablewrap"><table><thead><tr>{(kind === "students" ? ["Código", "Nombre", "Correo", "Estado"] : kind === "courses" ? ["Código", "Curso", "Nivel", "Estado"] : ["Evaluación", "Curso ID", "Puntaje máximo", "Estado"]).map((x) => <th key={x}>{x}</th>)}</tr></thead><tbody>
-      {items.map((x: any) => <tr key={x.id}>{kind === "students" ? <><td><b>{x.student_code}</b></td><td>{x.full_name}</td><td>{x.email}</td><td><span className="pill green">{x.status}</span></td></> : kind === "courses" ? <><td><b>{x.code}</b></td><td>{x.title}</td><td>{x.level}</td><td><span className="pill green">{x.status}</span></td></> : <><td>{x.title}</td><td className="mono">{x.course_id?.slice(0, 9)}</td><td>{x.max_score}</td><td>{x.status}</td></>}</tr>)}
+    <div className="tablewrap"><table><thead><tr>{[...(kind === "students" ? ["Código", "Nombre", "Correo", "Estado"] : kind === "courses" ? ["Código", "Curso", "Nivel", "Estado"] : ["Evaluación", "Curso ID", "Puntaje máximo", "Estado"]), "Acciones"].map((x) => <th key={x}>{x}</th>)}</tr></thead><tbody>
+      {items.map((x: any) => <tr key={x.id}>{kind === "students" ? <><td><b>{x.student_code}</b></td><td>{x.full_name}</td><td>{x.email}</td><td><span className="pill green">{x.status}</span></td></> : kind === "courses" ? <><td><b>{x.code}</b></td><td>{x.title}</td><td>{x.level}</td><td><span className="pill green">{x.status}</span></td></> : <><td>{x.title}</td><td className="mono">{x.course_id?.slice(0, 9)}</td><td>{x.max_score}</td><td>{x.status}</td></>}<td><button className="outline small" title="Editar" onClick={() => { setEditingId(x.id); setForm(kind === "students" ? {code:x.student_code,name:x.full_name,email:x.email} : kind === "courses" ? {code:x.code,title:x.title,description:x.description,level:x.level} : {course_id:x.course_id,title:x.title,max_score:x.max_score,due_date:x.due_date}); setShow(true); }}><Pencil size={13}/></button> <button className="outline small" title="Eliminar o archivar" onClick={async()=>{if(!confirm("¿Deseas eliminar o archivar este registro?"))return;try{await api(`/api/v1/${kind}/${x.id}`,{method:"DELETE"});await refresh();}catch(e:any){alert(e.message)}}}><Trash2 size={13}/></button></td></tr>)}
     </tbody></table>{!items.length && <div className="empty">Aún no hay registros.</div>}</div>
   </div>;
 }
+
+
+function EnrollmentPage({ items, students, courses, api, refresh }: any) {
+  const [student, setStudent] = useState(""); const [course, setCourse] = useState(""); const [busy, setBusy] = useState(false);
+  async function save(e: React.FormEvent) { e.preventDefault(); setBusy(true); try { await api("/api/v1/enrollments", { method: "POST", body: JSON.stringify({ student_id: student, course_id: course }) }); setStudent(""); setCourse(""); await refresh(); } catch (e: any) { alert(e.message); } finally { setBusy(false); } }
+  return <div className="panel"><div className="panelhead"><div><h3>Matrículas académicas</h3><p>Asocia estudiantes con cursos de la institución.</p></div><GraduationCap /></div><form className="inlineform" onSubmit={save}><select required value={student} onChange={e=>setStudent(e.target.value)}><option value="">Seleccionar estudiante</option>{students.map((x:any)=><option key={x.id} value={x.id}>{x.full_name}</option>)}</select><select required value={course} onChange={e=>setCourse(e.target.value)}><option value="">Seleccionar curso</option>{courses.map((x:any)=><option key={x.id} value={x.id}>{x.title}</option>)}</select><button className="primary" disabled={busy || !students.length || !courses.length}>{busy?"Guardando…":"Registrar matrícula"}</button></form><div className="tablewrap"><table><thead><tr><th>Estudiante ID</th><th>Curso ID</th><th>Estado</th><th>Fecha</th></tr></thead><tbody>{items.map((x:any)=><tr key={x.id}><td>{x.student_id}</td><td>{x.course_id}</td><td><select value={x.status} onChange={async(e)=>{try{await api(`/api/v1/enrollments/${x.id}/status?status_value=${e.target.value}`,{method:"PATCH"});await refresh();}catch(err:any){alert(err.message)}}}><option value="active">Activa</option><option value="completed">Completada</option><option value="withdrawn">Retirada</option></select></td><td>{x.enrolled_at?new Date(x.enrolled_at).toLocaleDateString():"—"}</td></tr>)}</tbody></table>{!items.length&&<div className="empty">Todavía no hay matrículas.</div>}</div></div>;
+}
+function PathsPage({ items, api, refresh }: any) {
+  const [title,setTitle]=useState(""); const [description,setDescription]=useState(""); const [level,setLevel]=useState("General");
+  async function save(e:React.FormEvent){e.preventDefault();try{await api("/api/v1/learning-paths",{method:"POST",body:JSON.stringify({title,description,level,status:"published"})});setTitle("");setDescription("");await refresh();}catch(e:any){alert(e.message)}}
+  return <div className="panel"><div className="panelhead"><div><h3>Rutas de aprendizaje</h3><p>Define itinerarios y niveles formativos.</p></div><Layers3/></div><form className="inlineform" onSubmit={save}><input required placeholder="Nombre de la ruta" value={title} onChange={e=>setTitle(e.target.value)}/><input placeholder="Descripción" value={description} onChange={e=>setDescription(e.target.value)}/><select value={level} onChange={e=>setLevel(e.target.value)}><option>Inicial</option><option>General</option><option>Intermedio</option><option>Avanzado</option></select><button className="primary">Crear ruta</button></form>{items.map((x:any)=><div className="modelitem" key={x.id}><div className="modelicon"><BookOpen/></div><div><b>{x.title}</b><small>{x.description}</small><small>{x.level} · {x.status}</small></div></div>)}{!items.length&&<div className="empty">No hay rutas formativas creadas.</div>}</div>;
+}
+function CertificatesPage({items,students,courses,api,refresh}:any){const [student,setStudent]=useState("");const [course,setCourse]=useState("");async function issue(e:React.FormEvent){e.preventDefault();try{const x=await api("/api/v1/certificates",{method:"POST",body:JSON.stringify({student_id:student,course_id:course})});alert(`Certificado emitido: ${x.certificate_code}`);await refresh();}catch(e:any){alert(e.message)}}return <div className="panel"><div className="panelhead"><div><h3>Emisión y verificación de certificados</h3><p>Solo se emiten para matrículas marcadas como completadas.</p></div><Award/></div><form className="inlineform" onSubmit={issue}><select required value={student} onChange={e=>setStudent(e.target.value)}><option value="">Estudiante</option>{students.map((x:any)=><option key={x.id} value={x.id}>{x.full_name}</option>)}</select><select required value={course} onChange={e=>setCourse(e.target.value)}><option value="">Curso</option>{courses.map((x:any)=><option key={x.id} value={x.id}>{x.title}</option>)}</select><button className="primary">Emitir certificado</button></form>{items.map((x:any)=><div className="auditrow" key={x.id}><Award/><b>{x.certificate_code}</b><span>{x.student_id}</span><span>{x.course_id}</span><small>{x.issued_at?new Date(x.issued_at).toLocaleDateString():""}</small></div>)}{!items.length&&<div className="empty">No se han emitido certificados.</div>}</div>}
+function AdminPage({items,user,orgName,api,refresh}:any){const [name,setName]=useState("");const [email,setEmail]=useState("");const [password,setPassword]=useState("");const [role,setRole]=useState("teacher");async function create(e:React.FormEvent){e.preventDefault();try{await api("/api/v1/users",{method:"POST",body:JSON.stringify({full_name:name,email,password,role})});setName("");setEmail("");setPassword("");await refresh();}catch(e:any){alert(e.message)}}return <div className="grid2"><div className="panel"><div className="panelhead"><div><h3>Usuarios y roles</h3><p>Administración de accesos institucionales.</p></div><ShieldCheck/></div><form className="eventform" onSubmit={create}><label>Nombre completo</label><input required value={name} onChange={e=>setName(e.target.value)}/><label>Correo institucional</label><input required type="email" value={email} onChange={e=>setEmail(e.target.value)}/><label>Contraseña temporal (12 caracteres mínimo)</label><input required minLength={12} type="password" value={password} onChange={e=>setPassword(e.target.value)}/><label>Rol</label><select value={role} onChange={e=>setRole(e.target.value)}><option value="teacher">Docente</option><option value="student">Estudiante</option><option value="analyst">Analista</option><option value="director">Director</option><option value="institution_admin">Administrador</option></select><button className="primary">Crear usuario</button></form></div><div className="panel"><h3>Entorno institucional</h3><div className="quality"><span>Institución</span><b>{orgName}</b></div><div className="quality"><span>Usuario actual</span><b>{user?.full_name}</b></div><div className="quality"><span>Rol</span><b>{user?.role}</b></div><div className="quality"><span>Usuarios registrados</span><b>{items.length}</b></div></div><div className="panel span2"><h3>Directorio de usuarios</h3>{items.map((x:any)=><div className="auditrow" key={x.id}><Users/><b>{x.full_name}</b><span>{x.email}</span><span>{x.role}</span><span className={`pill ${x.is_active?"green":"gray"}`}>{x.is_active?"Activo":"Inactivo"}</span></div>)}{!items.length&&<div className="empty">No hay usuarios registrados.</div>}</div></div>}
 
 function EventForm({ students, api }: any) {
   const [student, setStudent] = useState(""); const [type, setType] = useState("lesson_viewed"); const [desc, setDesc] = useState("");
@@ -365,7 +398,7 @@ function Analytics({ data }: any) {
 }
 
 function Models({ items }: any) {
-  return <div className="grid2"><div className="panel"><div className="panelhead"><div><h3>Registro de modelos</h3><p>Versiones y estado de aprobación</p></div><BrainCircuit /></div>{items.map((x: any) => <div className="modelitem" key={x.id}><div className="modelicon"><Network /></div><div><b>{x.name}</b><small>Versión {x.version} · {x.stage}</small><small>{x.description}</small></div><span className="pill amber">{x.approval_status}</span></div>)}{!items.length && <div className="empty">No hay modelos registrados.</div>}<div className="demo-note">Los checkpoints y métricas se muestran cuando el backend los registra.</div></div><div className="panel"><h3>Flujo MLOps previsto</h3>{["Dataset versionado", "Baseline interpretable", "Entrenamiento PyTorch", "Evaluación y calibración", "Registro MLflow", "Aprobación humana", "Staging / Shadow", "Producción y monitoreo"].map((x, i) => <div className="flowstep" key={x}><span>{i + 1}</span>{x}</div>)}</div></div>;
+  return <div className="grid2"><div className="panel"><div className="panelhead"><div><h3>Registro de modelos</h3><p>Versiones y estado de aprobación</p></div><BrainCircuit /></div>{items.map((x: any) => <div className="modelitem" key={x.id}><div className="modelicon"><Network /></div><div><b>{x.name}</b><small>Versión {x.version} · {x.stage}</small><small>{x.description}</small></div><span className="pill amber">{x.approval_status}</span></div>)}{!items.length && <div className="empty">No hay modelos registrados.</div>}<div className="notice-note">Los checkpoints y métricas se muestran cuando el backend los registra.</div></div><div className="panel"><h3>Flujo MLOps previsto</h3>{["Dataset versionado", "Baseline interpretable", "Entrenamiento PyTorch", "Evaluación y calibración", "Registro MLflow", "Aprobación humana", "Staging / Shadow", "Producción y monitoreo"].map((x, i) => <div className="flowstep" key={x}><span>{i + 1}</span>{x}</div>)}</div></div>;
 }
 
 function MLLab({ token, apiBase }: any) {
@@ -393,9 +426,9 @@ function MLLab({ token, apiBase }: any) {
   const dataset = datasets.find((x) => x.id === selected);
   return <div className="grid2">
     <div className="panel"><div className="panelhead"><div><h3>1. Ingesta y calidad del dataset</h3><p>CSV supervisado · máximo 10 MB</p></div><Database /></div><label className="uploadbox"><input type="file" accept=".csv,text/csv" onChange={upload} disabled={busy} /><b>Seleccionar archivo CSV</b><small>Valida estructura, filas y valores faltantes.</small></label>{datasets.map((d) => <button key={d.id} className={`datasetrow ${selected === d.id ? "selected" : ""}`} onClick={() => { setSelected(d.id); setTarget(d.columns?.[d.columns.length - 1] || ""); setResult(null); }}><Database size={17} /><span><b>{d.filename}</b><small>{d.rows} filas · {d.columns?.length} columnas · {d.missing} faltantes</small></span><span className="pill gray">{selected === d.id ? "Elegido" : "Usar"}</span></button>)}{!datasets.length && <div className="empty">Todavía no has cargado datasets.</div>}</div>
-    <div className="panel"><div className="panelhead"><div><h3>2. Configuración de red neuronal</h3><p>Perceptrón multicapa (MLP) para clasificación</p></div><BrainCircuit /></div><label>Columna objetivo</label><select value={target} onChange={(e) => setTarget(e.target.value)} disabled={!dataset}>{(dataset?.columns || []).map((c: string) => <option key={c}>{c}</option>)}</select><label>Capas ocultas</label><input value={layers} onChange={(e) => setLayers(e.target.value)} placeholder="64,32" /><small className="muted">Ejemplo: 64,32 crea dos capas ocultas.</small><label>Función de activación</label><select value={activation} onChange={(e) => setActivation(e.target.value)}><option value="relu">ReLU</option><option value="tanh">Tanh</option><option value="logistic">Sigmoide</option></select><label>Épocas máximas</label><input type="number" min="30" max="1000" value={epochs} onChange={(e) => setEpochs(e.target.value)} /><button className="primary full" disabled={busy || !dataset || !target} onClick={train}>{busy ? "Procesando…" : "Entrenar red neuronal"}</button><div className="demo-note">División 80% entrenamiento y 20% prueba. El pipeline procesa valores faltantes, escala numéricos y codifica categorías.</div></div>
+    <div className="panel"><div className="panelhead"><div><h3>2. Configuración de red neuronal</h3><p>Perceptrón multicapa (MLP) para clasificación</p></div><BrainCircuit /></div><label>Columna objetivo</label><select value={target} onChange={(e) => setTarget(e.target.value)} disabled={!dataset}>{(dataset?.columns || []).map((c: string) => <option key={c}>{c}</option>)}</select><label>Capas ocultas</label><input value={layers} onChange={(e) => setLayers(e.target.value)} placeholder="64,32" /><small className="muted">Ejemplo: 64,32 crea dos capas ocultas.</small><label>Función de activación</label><select value={activation} onChange={(e) => setActivation(e.target.value)}><option value="relu">ReLU</option><option value="tanh">Tanh</option><option value="logistic">Sigmoide</option></select><label>Épocas máximas</label><input type="number" min="30" max="1000" value={epochs} onChange={(e) => setEpochs(e.target.value)} /><button className="primary full" disabled={busy || !dataset || !target} onClick={train}>{busy ? "Procesando…" : "Entrenar red neuronal"}</button><div className="notice-note">División 80% entrenamiento y 20% prueba. El pipeline procesa valores faltantes, escala numéricos y codifica categorías.</div></div>
     {message && <div className="panel span2"><p className="muted">{message}</p></div>}
-    {result && <div className="panel span2"><div className="panelhead"><div><h3>3. Resultados de evaluación</h3><p>Experimento {String(result.id).slice(0, 8)} · holdout 80/20</p></div><span className="pill amber">Experimental / no aprobado</span></div><div className="grid3"><Stat label="Accuracy" value={`${(result.accuracy * 100).toFixed(1)}%`} hint="Exactitud en prueba" /><Stat label="F1 ponderado" value={Number(result.f1_weighted).toFixed(3)} hint="Balance precisión / recall" /><Stat label="Épocas ejecutadas" value={result.epochs_completed} hint={`Máximo: ${result.max_epochs}`} /></div><div className="quality"><span>Precisión ponderada</span><b>{Number(result.precision_weighted).toFixed(3)}</b></div><div className="quality"><span>Recall ponderado</span><b>{Number(result.recall_weighted).toFixed(3)}</b></div><h4>Matriz de confusión</h4><div className="tablewrap"><table><tbody>{(result.confusion_matrix || []).map((row: number[], i: number) => <tr key={i}>{row.map((v, j) => <td key={j}>{v}</td>)}</tr>)}</tbody></table></div><p className="muted">Características: {(result.features || []).join(", ")}. Clases: {(result.classes || []).join(", ")}.</p><div className="demo-note">Las métricas dependen del dataset y no demuestran por sí solas validez educativa.</div></div>}
+    {result && <div className="panel span2"><div className="panelhead"><div><h3>3. Resultados de evaluación</h3><p>Experimento {String(result.id).slice(0, 8)} · holdout 80/20</p></div><span className="pill amber">Experimental / no aprobado</span></div><div className="grid3"><Stat label="Accuracy" value={`${(result.accuracy * 100).toFixed(1)}%`} hint="Exactitud en prueba" /><Stat label="F1 ponderado" value={Number(result.f1_weighted).toFixed(3)} hint="Balance precisión / recall" /><Stat label="Épocas ejecutadas" value={result.epochs_completed} hint={`Máximo: ${result.max_epochs}`} /></div><div className="quality"><span>Precisión ponderada</span><b>{Number(result.precision_weighted).toFixed(3)}</b></div><div className="quality"><span>Recall ponderado</span><b>{Number(result.recall_weighted).toFixed(3)}</b></div><h4>Matriz de confusión</h4><div className="tablewrap"><table><tbody>{(result.confusion_matrix || []).map((row: number[], i: number) => <tr key={i}>{row.map((v, j) => <td key={j}>{v}</td>)}</tr>)}</tbody></table></div><p className="muted">Características: {(result.features || []).join(", ")}. Clases: {(result.classes || []).join(", ")}.</p><div className="notice-note">Las métricas dependen del dataset y no demuestran por sí solas validez educativa.</div></div>}
     <div className="panel span2"><div className="panelhead"><div><h3>4. Historial de experimentos</h3><p>Entrenamientos guardados por institución</p></div><Clock3 /></div>{experiments.map((x) => <div className="auditrow" key={x.id}><BrainCircuit /><b>{x.dataset_name}</b><span>{x.target}</span><span>Accuracy {(x.accuracy * 100).toFixed(1)}%</span><small>{x.architecture?.join("–")} · {x.epochs_completed} épocas</small></div>)}{!experiments.length && <div className="empty">Aún no hay experimentos.</div>}</div>
   </div>;
 }
