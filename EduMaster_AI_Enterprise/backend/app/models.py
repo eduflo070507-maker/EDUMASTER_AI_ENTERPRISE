@@ -13,8 +13,8 @@ def utcnow():
 class Organization(Base):
     __tablename__ = "organizations"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    name: Mapped[str] = mapped_column(String(160), default="Institución DEMO")
-    code: Mapped[str] = mapped_column(String(40), unique=True, default="DEMO")
+    name: Mapped[str] = mapped_column(String(160), default="Institución educativa")
+    code: Mapped[str] = mapped_column(String(40), unique=True, default="INSTITUCION")
     status: Mapped[str] = mapped_column(String(20), default="active")
 
 class User(Base):
@@ -79,16 +79,17 @@ class Recommendation(Base):
     title: Mapped[str] = mapped_column(String(180))
     rationale: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(30), default="pending")
-    source: Mapped[str] = mapped_column(String(30), default="DEMO")
+    source: Mapped[str] = mapped_column(String(30), default="manual_review")
 
 class ModelVersion(Base):
     __tablename__ = "model_versions"
+    organization_id: Mapped[str | None] = mapped_column(ForeignKey("organizations.id"), nullable=True, index=True)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     name: Mapped[str] = mapped_column(String(120))
-    version: Mapped[str] = mapped_column(String(40), default="0.1.0-demo")
+    version: Mapped[str] = mapped_column(String(40), default="0.1.0")
     stage: Mapped[str] = mapped_column(String(30), default="experimental")
     approval_status: Mapped[str] = mapped_column(String(30), default="not_approved")
-    description: Mapped[str] = mapped_column(Text, default="Modelo demostrativo; no validado para uso educativo.")
+    description: Mapped[str] = mapped_column(Text, default="Modelo experimental pendiente de evaluación y aprobación institucional.")
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
@@ -98,3 +99,52 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(100))
     resource: Mapped[str] = mapped_column(String(100))
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+class LearningPath(Base):
+    __tablename__ = "learning_paths"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    title: Mapped[str] = mapped_column(String(180))
+    description: Mapped[str] = mapped_column(Text, default="")
+    level: Mapped[str] = mapped_column(String(50), default="General")
+    status: Mapped[str] = mapped_column(String(30), default="draft")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+class Enrollment(Base):
+    __tablename__ = "enrollments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    student_id: Mapped[str] = mapped_column(ForeignKey("students.id"), index=True)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="active")
+    enrolled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+class AssessmentResult(Base):
+    __tablename__ = "assessment_results"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    assessment_id: Mapped[str] = mapped_column(ForeignKey("assessments.id"), index=True)
+    student_id: Mapped[str] = mapped_column(ForeignKey("students.id"), index=True)
+    score: Mapped[float] = mapped_column(Float)
+    feedback: Mapped[str] = mapped_column(Text, default="")
+    graded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+class Certificate(Base):
+    __tablename__ = "certificates"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    student_id: Mapped[str] = mapped_column(ForeignKey("students.id"), index=True)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), index=True)
+    certificate_code: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    status: Mapped[str] = mapped_column(String(30), default="issued")
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(180))
+    message: Mapped[str] = mapped_column(Text, default="")
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
