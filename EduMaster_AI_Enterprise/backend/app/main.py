@@ -30,6 +30,7 @@ default_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://edumaster-ai-enterprise-1c9x34fzh-eduardo-8949.vercel.app",
+    "https://edumaster-ai-enterprise-six.vercel.app",
 ]
 
 env_origins = os.getenv("CORS_ORIGINS", "")
@@ -60,10 +61,10 @@ def seed():
         if not org:
             org = models.Organization(name="Institución EduMaster DEMO", code="DEMO")
             db.add(org); db.flush()
-        admin = db.query(models.User).filter_by(email="admin@edumaster.local").first()
+        admin = db.query(models.User).filter_by(email="admin@edumaster.ai").first()
         if not admin:
             db.add(models.User(organization_id=org.id, full_name="Administrador DEMO",
-                email="admin@edumaster.local", password_hash=hash_password("EduMaster123!"), role="superadmin"))
+                email="admin@edumaster.ai", password_hash=hash_password("EduMaster123!"), role="superadmin"))
         if db.query(models.Course).count() == 0:
             db.add_all([
                 models.Course(organization_id=org.id, code="MAT-101", title="Matemática aplicada", description="Fundamentos y resolución de problemas.", level="Básico"),
